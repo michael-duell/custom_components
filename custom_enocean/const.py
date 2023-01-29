@@ -15,10 +15,8 @@ SIGNAL_SEND_MESSAGE = "enocean.send_message"
 LOGGER = logging.getLogger(__package__)
 
 PLATFORMS = [
-    Platform.LIGHT,
     Platform.BINARY_SENSOR,
-    Platform.SENSOR,
-    Platform.SWITCH,
+    Platform.CLIMATE
 ]
 
 #sensor attributes
@@ -31,3 +29,9 @@ ATTR_CHARGELEVEL_OK = "chargelevel_ok"
 ATTR_COMUNICATION_OK = "communication_ok"
 ATTR_SIGNALSTRENGTH_OK = "signalstrength_ok"
 ATTR_ACTUATOR_OK = "actuator_ok"
+
+Thermostat_SETTINGS = {
+    "min": 4,
+    "max": 31,
+    "step": 0.5,
+}
