@@ -1,7 +1,9 @@
 """Constants for the ENOcean integration."""
 import logging
 
+from enum import Enum
 from homeassistant.const import Platform
+from typing import Final
 
 DOMAIN = "custom_enocean"
 DATA_ENOCEAN = "custom_enocean"
@@ -19,19 +21,14 @@ PLATFORMS = [
     Platform.CLIMATE
 ]
 
-#sensor attributes
-ATTR_VALVE_POSITION = "valve_position"
-ATTR_TARGET_TEMPERATURE = "target_temperature"
-ATTR_CURRENT_TEMPERATURE = "current_temperature"
-ATTR_HARVESTING_ACTIVE = "harvesting_active"
-ATTR_WINDOW_OPEN = "window_open"
-ATTR_CHARGELEVEL_OK = "chargelevel_ok"
-ATTR_COMUNICATION_OK = "communication_ok"
-ATTR_SIGNALSTRENGTH_OK = "signalstrength_ok"
-ATTR_ACTUATOR_OK = "actuator_ok"
-
-Thermostat_SETTINGS = {
+THERMOSTAT_SETTINGS: Final = {
     "min": 4,
     "max": 31,
     "step": 0.5,
 }
+
+class THERMOSTAT_STATE(Enum):
+    OFF = 0
+    TEACH_IN = 1
+    OPERATIONAL = 2
+    ERROR = 3
