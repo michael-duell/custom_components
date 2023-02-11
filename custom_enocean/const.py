@@ -32,3 +32,14 @@ class THERMOSTAT_STATE(Enum):
     TEACH_IN = 1
     OPERATIONAL = 2
     ERROR = 3
+
+class THERMOSTAT_DUTY_CYCLE(Enum):
+    AUTO = 0
+    MIN_2 = 1
+    MIN_5 = 2
+    MIN_10 = 3
+    MIN_20 = 4
+    MIN_30 = 5
+    MIN_60 = 6
+    MIN_120 = 7
+

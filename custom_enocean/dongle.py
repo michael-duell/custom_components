@@ -48,6 +48,7 @@ class EnOceanDongle:
     def _send_message_callback(self, command):
         """Send a command through the EnOcean dongle."""
         self._communicator.send(command)
+        _LOGGER.debug("sending: %s", command)
 
     def callback(self, packet):
         """Handle EnOcean device's callback.

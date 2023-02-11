@@ -34,13 +34,19 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .device import EnOceanEntity
-from .const import THERMOSTAT_SETTINGS, THERMOSTAT_STATE
+from .const import THERMOSTAT_DUTY_CYCLE, THERMOSTAT_SETTINGS, THERMOSTAT_STATE
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_NAME = "EnOcean sensor"
 
 CLIMATE_TYPE_THERMOSTAT = "thermostat"
+
+# todo
+# feed sensor (+selection)
+# change duty cycle
+# activate standby
+# trigger reference drive
 
 
 @dataclass
@@ -160,15 +166,20 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._attr_native_value = None
         self._state = THERMOSTAT_STATE.OFF
         self._valve_position = 0
-        self._target_temperature = 0
+        self._target_temperature = 20
         self._current_temperature = 0
-        self._external_tem_sensor = False
+        self.teach_in = False
         self._harvesting_active = False
         self._chargelevel_ok = False
         self._window_open = False
         self._communication_ok = False
         self._signalstrength_ok = False
-        self._actuator_ok = False    
+        self._actuator_ok = False
+        self._trigger_reference_run = False
+        self._duty_cycle = THERMOSTAT_DUTY_CYCLE.AUTO
+        self._summer_mode = False
+        self._external_tem_sensor = False
+        self._standby = False
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -201,7 +212,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
     @property
     def current_temperature(self) -> float | None:
         """Return current temperature."""
-        return self._current_temperature    
+        return self._current_temperature
 
     @property
     def extra_state_attributes(self):
@@ -217,7 +228,8 @@ class EnOceanThermostatSensor(EnOceanClimate):
             "chargelevel_ok": self._chargelevel_ok,
             "communication_ok": self._communication_ok,
             "signalstrength_ok": self._signalstrength_ok,
-            "actuator_ok": self._actuator_ok
+            "actuator_ok": self._actuator_ok,
+            "teach:in": self.teach_in
         }
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -229,38 +241,132 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
     def value_changed(self, packet):
 
-        _LOGGER.info("[%s] incoming data: %s", self.dev_name, packet.data)
+        _LOGGER.debug("[%s] incoming data: %s", self.dev_name, packet.data)
 
         databits = to_bitarray(packet.data)
         self._attr_native_value = databits
 
+        #optional = [0x03]
+        # optional.extend(self.dev_id)
+        #optional.extend([0xFF, 0x00])
+        # self.send_command(
+        #    data=[0xA5, 0x28, 0x50, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
+        #    optional=optional,
+        #    packet_type=0x01,
+        #
+        # )
+
+        self.teach_in = not databits[36]
+
+        if self.teach_in:
+            # teach-in
+            self._state = THERMOSTAT_STATE.TEACH_IN
+            self.handle_teachin_telegram(databits)
+
+        else:
+            # normal mode
+            self._state = THERMOSTAT_STATE.OPERATIONAL
+            self.handle_data_telegram(databits)
+
+
+        """Update the internal state of the sensor."""
+        self.schedule_update_ha_state()
+
+    def handle_data_telegram(self, databits):
+        _LOGGER.debug("handle data telegram")
         # extract properties
         self._valve_position = from_bitarray(databits[8:16])
         local_offset_mode = databits[16]  # should always be 1
-        self._target_temperature = from_bitarray(databits[17:24])/2.0
         self._current_temperature = from_bitarray(databits[24:32])/2.0
-        self._external_tem_sensor = databits[32]
+        tslmode = databits[32]
         self._harvesting_active = databits[33]
         self._chargelevel_ok = databits[34]
         self._window_open = databits[35]
-        is_data_telegram = databits[36]
         self._communication_ok = not databits[37]
         self._signalstrength_ok = not databits[38]
         self._actuator_ok = not databits[39]
 
-        if is_data_telegram:
-            # normal mode
-            if local_offset_mode == 1:
-                self._state = THERMOSTAT_STATE.TEACH_IN
-                _LOGGER.error("not implemented")
+        # if lom == 0 bit 9...15 represents temprature difference to the current target temperatur
+        # -> room contol only sends the valve position, actuator does not know the target temperature
+        if (local_offset_mode == 1):
+            self._target_temperature = from_bitarray(databits[17:24])/2.0
 
+        # trigger a warning, if the TSL does not match value sent to ACT (selection of temperature sensor (ext/int) )
+        if (tslmode != self._external_tem_sensor):
+            text = "internal sensor"
+            if (tslmode == 1):
+                text = "external sensor"
+            _LOGGER.warning(
+                "expected actuator to use %s (TSL=%s)", text, tslmode)
+
+        self.send_response()
+
+    def handle_teachin_telegram(self, databits):
+        _LOGGER.debug("handle teach in telegram")
+        # extract properties
+        program = hex(from_bitarray(databits[0:8]))
+        function = hex(from_bitarray(databits[8:14]))
+        type = hex(from_bitarray(databits[14:21]))
+        manufacturer_id = hex(from_bitarray(databits[21:32]))
+
+        # check properties
+        if (program != 0xA5):
+            _LOGGER.error("unexpected program id: %s, expected 0xA5", program)
+            return
+        if (function != 0x20):
+            _LOGGER.error(
+                "unexpected function id: %s, expected 0x20", function)
+            return
+        if (type != 0x06):
+            _LOGGER.error("unexpected program id: %s, expected 0x0", type)
+            return
+        if (manufacturer_id != 0x49):
+            _LOGGER.error(
+                "unexpected type: %s, expected 0x45 (Micropelt)", type)
+            return
+
+        # send success
+        optional = [0x03]
+        optional.extend([0xFF, 0xFF, 0xFF, 0xFF])
+        optional.extend([0xFF, 0x00])
+        self.send_command(
+            data=[0xA5, 0x80, 0x30, 0x49, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00],
+            optional=optional,
+            packet_type=0x01,
+        )
+
+        # send first telegram
+        self.send_response()
+
+    def send_response(self):
+        data = [0xA5]
+        # DB3
+        data.extend(hex(self.target_temperature))
+        # DB2
+        if (self._external_tem_sensor):
+            # todo: implement feed temperature
+            data.extend(0x00)
         else:
-            # teach-in
-            self._state = THERMOSTAT_STATE.OPERATIONAL
-            _LOGGER.error("not implemented")
-            # self.handle_teachin()
+            data.extend(0x00)
+        # DB1
+        duty_bits = to_bitarray(self._duty_cycle)
+        data.extend(from_bitarray([self._trigger_reference_run, duty_bits[2], duty_bits[1],
+                    duty_bits[0], self._summer_mode, True, self._external_tem_sensor, self._standby]))
 
-        # send response
+        #only trigger stanby and reference run once
+        self._trigger_reference_run = False
+        self._standby = False
 
-        """Update the internal state of the sensor."""
-        self.schedule_update_ha_state()
+        # DB0
+        data.extend(0x80)
+        # extend date with 0 (place holder for senderid and status)
+        data = [0x00, 0x00, 0x00, 0x00, 0x00]
+
+        optional = [0x03]
+        optional.extend([0xFF, 0xFF, 0xFF, 0xFF])
+        optional.extend([0xFF, 0x00])
+        self.send_command(
+            data=[0xA5, 0x80, 0x30, 0x49, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00],
+            optional=optional,
+            packet_type=0x01,
+        )

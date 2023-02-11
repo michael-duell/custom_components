@@ -93,7 +93,7 @@ class EnOceanBinarySensor(EnOceanEntity, BinarySensorEntity):
             ['0xf6', '0x10', '0xfe', '0xea', '0xd', '0xc9', '0x20'] / [246, 16, 254, 234, 13, 201, 32]
         """
 
-        _LOGGER.info("[%s] incoming data: %s", self.dev_name, packet.data)
+        _LOGGER.debug("[%s] incoming data: %s", self.dev_name, packet.data)
 
         #set attribute
         self._is_open = (packet.data[1] == 0)
