@@ -176,7 +176,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._signalstrength_ok = False
         self._actuator_ok = False
         self._trigger_reference_run = False
-        self._duty_cycle = THERMOSTAT_DUTY_CYCLE.AUTO
+        self._duty_cycle = THERMOSTAT_DUTY_CYCLE["AUTO"]
         self._summer_mode = False
         self._external_tem_sensor = False
         self._standby = False
@@ -248,9 +248,9 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
         #optional = [0x03]
         # optional.extend(self.dev_id)
-        #optional.extend([0xFF, 0x00])
+        #optional.extend([0xff, 0x00])
         # self.send_command(
-        #    data=[0xA5, 0x28, 0x50, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
+        #    data=[0xa5, 0x28, 0x50, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
         #    optional=optional,
         #    packet_type=0x01,
         #
@@ -304,21 +304,21 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def handle_teachin_telegram(self, databits):
         _LOGGER.debug("handle teach in telegram")
         # extract properties
-        program = hex(from_bitarray(databits[0:8]))
-        function = hex(from_bitarray(databits[8:14]))
-        type = hex(from_bitarray(databits[14:21]))
-        manufacturer_id = hex(from_bitarray(databits[21:32]))
+        program = (from_bitarray(databits[0:8]))
+        function = (from_bitarray(databits[8:14]))
+        type = (from_bitarray(databits[14:21]))
+        manufacturer_id = (from_bitarray(databits[21:32]))
 
         # check properties
-        if (program != 0xA5):
-            _LOGGER.error("unexpected program id: %s, expected 0xA5", program)
+        if (program != 0xa5):
+            _LOGGER.error("unexpected program id: %s, expected 0xa5", program)
             return
         if (function != 0x20):
             _LOGGER.error(
                 "unexpected function id: %s, expected 0x20", function)
             return
-        if (type != 0x06):
-            _LOGGER.error("unexpected program id: %s, expected 0x0", type)
+        if (type != 0x6):
+            _LOGGER.error("unexpected type: %s, expected 0x06", type)
             return
         if (manufacturer_id != 0x49):
             _LOGGER.error(
@@ -327,10 +327,10 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
         # send success
         optional = [0x03]
-        optional.extend([0xFF, 0xFF, 0xFF, 0xFF])
-        optional.extend([0xFF, 0x00])
+        optional.extend([0xff, 0xff, 0xff, 0xff])
+        optional.extend([0xff, 0x00])
         self.send_command(
-            data=[0xA5, 0x80, 0x30, 0x49, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00],
+            data=[0xa5, 0x80, 0x30, 0x49, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00],
             optional=optional,
             packet_type=0x01,
         )
@@ -339,34 +339,34 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self.send_response()
 
     def send_response(self):
-        data = [0xA5]
+        data = [0xa5]
         # DB3
-        data.extend(hex(self.target_temperature))
+        data.extend([int(self.target_temperature)])
         # DB2
         if (self._external_tem_sensor):
             # todo: implement feed temperature
-            data.extend(0x00)
+            data.extend([0x00])
         else:
-            data.extend(0x00)
+            data.extend([0x00])
         # DB1
         duty_bits = to_bitarray(self._duty_cycle)
-        data.extend(from_bitarray([self._trigger_reference_run, duty_bits[2], duty_bits[1],
-                    duty_bits[0], self._summer_mode, True, self._external_tem_sensor, self._standby]))
+        data.extend([from_bitarray([self._trigger_reference_run, duty_bits[2], duty_bits[1],
+                    duty_bits[0], self._summer_mode, True, self._external_tem_sensor, self._standby])])
 
         #only trigger stanby and reference run once
         self._trigger_reference_run = False
         self._standby = False
 
         # DB0
-        data.extend(0x80)
+        data.extend([0x80])
         # extend date with 0 (place holder for senderid and status)
-        data = [0x00, 0x00, 0x00, 0x00, 0x00]
+        data.extend([0x00, 0x00, 0x00, 0x00, 0x00])
 
         optional = [0x03]
-        optional.extend([0xFF, 0xFF, 0xFF, 0xFF])
-        optional.extend([0xFF, 0x00])
+        optional.extend([0xff, 0xff, 0xff, 0xff])
+        optional.extend([0xff, 0x00])
         self.send_command(
-            data=[0xA5, 0x80, 0x30, 0x49, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00],
+            data=data,
             optional=optional,
             packet_type=0x01,
         )

@@ -27,19 +27,20 @@ THERMOSTAT_SETTINGS: Final = {
     "step": 0.5,
 }
 
+THERMOSTAT_DUTY_CYCLE: Final ={
+    "AUTO": 0,
+    "2_MIN": 1,
+    "5_MIN": 2,
+    "10_MIN": 3,
+    "20_MIN": 4,
+    "30_MIN": 5,
+    "60_MIN": 6,
+    "120_MIN": 7
+}
+
 class THERMOSTAT_STATE(Enum):
     OFF = 0
     TEACH_IN = 1
     OPERATIONAL = 2
     ERROR = 3
-
-class THERMOSTAT_DUTY_CYCLE(Enum):
-    AUTO = 0
-    MIN_2 = 1
-    MIN_5 = 2
-    MIN_10 = 3
-    MIN_20 = 4
-    MIN_30 = 5
-    MIN_60 = 6
-    MIN_120 = 7
 
