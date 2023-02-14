@@ -1,0 +1,108 @@
+from homeassistant.components.climate import ClimateEntity, DOMAIN as CLIMATE_DOMAIN
+from homeassistant.const import TEMP_CELSIUS, ATTR_TEMPERATURE
+from homeassistant.helpers.typing import ConfigType, Any, Dict, Optional
+from homeassistant.helpers.service import async_register_entity_service
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+
+DOMAIN = 'micropelt_mva05'
+
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+    async_add_entities([MicropeltMVA05()])
+
+class MicropeltMVA05(ClimateEntity):
+    def __init__(self):
+        self._current_temperature = 0.0
+        self._target_temperature = 0.0
+        self._current_operation = 'off'
+        self._available = True
+
+    async def async_set_temperature(self, **kwargs):
+        """Set new target temperature."""
+        if ATTR_TEMPERATURE in kwargs:
+            self._target_temperature = kwargs[ATTR_TEMPERATURE]
+        if self._target_temperature < 0:
+            self._target_temperature = 0
+        if self._target_temperature > 100:
+            self._target_temperature = 100
+        await self.async_update_ha_state()
+
+    async def async_set_current_temperature_service(self, temperature: float):
+        """Set the current temperature of the device."""
+        # Set the current temperature of the device using the temperature parameter
+        set_current_temperature(temperature)
+
+        # Update the state of the climate entity
+        await self.async_update_ha_state()
+
+    async def async_update(self):
+        """Update state."""
+        # Get the current temperature, target temperature, and current operation mode from the MVA05 stellantrieb
+        current_temp = get_current_temperature()
+        target_temp = get_target_temperature()
+        current_mode = get_current_mode()
+
+        # Update the internal state of the climate entity
+        self._current_temperature = current_temp
+        self._target_temperature = target_temp
+        self._current_operation = current_mode
+
+    @property
+    def temperature_unit(self):
+        """Return the temperature unit."""
+        return TEMP_CELSIUS
+
+    @property
+    def current_temperature(self):
+        """Return the current temperature."""
+        return self._current_temperature
+
+    @property
+    def target_temperature(self):
+        """Return the temperature we try to reach."""
+        return self._target_temperature
+
+    @property
+    def hvac_mode(self):
+        """Return current operation ie. heat, cool, idle."""
+        return self._current_operation
+
+    @property
+    def hvac_modes(self):
+        """Return the list of available operation modes."""
+        return ['off', 'heat', 'cool']
+
+    @property
+    def min_temp(self):
+        """Return the minimum temperature."""
+        return 0
+
+    @property
+    def max_temp(self):
+        """Return the maximum temperature."""
+        return 100
+
+    @property
+    def supported_features(self):
+        """Return the list of supported features."""
+        return SUPPORT_TARGET_TEMPERATURE
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self._available
+
+    async def async_added_to_hass(self):
+        """Register the set current temperature service."""
+        await super().async_added_to_hass()
+
+        async_register_entity_service(
+            self.hass, 
+            DOMAIN, 
+            'set_current_temperature', 
+            {
+                vol.Required('temperature', msg='The new temperature'): vol.Coerce(float)
+            }, 
+            'async_set_current_temperature_service'
+       
