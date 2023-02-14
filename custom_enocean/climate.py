@@ -10,6 +10,7 @@ import logging
 
 
 from homeassistant.const import (
+    ATTR_TEMPERATURE,
     CONF_DEVICE_CLASS,
     CONF_ID,
     CONF_NAME,
@@ -28,13 +29,25 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_platform
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.template import is_number
 
 from .device import EnOceanEntity
-from .const import THERMOSTAT_DUTY_CYCLE, THERMOSTAT_SETTINGS, THERMOSTAT_STATE
+from .const import (
+    ATTR_VALUE,
+    CONF_USE_EXTERNAL_TEMP,
+    DUTY_CYCLES,
+    SERVICE_SET_DUTY_CYCLE,
+    SERVICE_SET_EXT_TEMP,
+    SERVICE_TRIGGER_REFERENCE_RUN,
+    SERVICE_TRIGGER_STANDBY,
+    THERMOSTAT_DUTY_CYCLE,
+    THERMOSTAT_SETTINGS,
+    THERMOSTAT_STATE)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +88,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
         vol.Optional(CONF_DEVICE_CLASS, default=CLIMATE_TYPE_THERMOSTAT): cv.string,
+        vol.Optional(CONF_USE_EXTERNAL_TEMP, default=False): cv.boolean,
     }
 )
 
@@ -89,6 +103,7 @@ def setup_platform(
     dev_id = config[CONF_ID]
     dev_name = config[CONF_NAME]
     sensor_type = config[CONF_DEVICE_CLASS]
+    use_external_temp_sensor = config[CONF_USE_EXTERNAL_TEMP]
 
     entities: list[EnOceanClimate] = []
     if sensor_type == CLIMATE_TYPE_THERMOSTAT:
@@ -96,11 +111,39 @@ def setup_platform(
             EnOceanThermostatSensor(
                 dev_id,
                 dev_name,
+                use_external_temp_sensor,
                 CLIMATE_DESC_THERMOSTAT
             )
         ]
 
     add_entities(entities)
+
+    platform = entity_platform.async_get_current_platform()
+
+    platform.async_register_entity_service(
+        SERVICE_TRIGGER_STANDBY, {}, "set_standby"
+    )
+
+    platform.async_register_entity_service(
+        SERVICE_TRIGGER_REFERENCE_RUN, {}, "set_reference_run"
+    )
+
+    platform.async_register_entity_service(
+        SERVICE_SET_DUTY_CYCLE, {vol.Required(
+            ATTR_VALUE): vol.In(DUTY_CYCLES)}, "set_duty_cycle"
+    )
+
+    platform.async_register_entity_service(
+        SERVICE_SET_EXT_TEMP, {vol.Required(
+            ATTR_VALUE): validate_is_number}, "set_external_temperature"
+    )
+
+
+def validate_is_number(value):
+    """Validate value is a number."""
+    if is_number(value):
+        return value
+    raise vol.Invalid("Value is not a number")
 
 
 class EnOceanClimate(EnOceanEntity, RestoreEntity, ClimateEntity):
@@ -157,18 +200,20 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self,
         dev_id,
         dev_name,
+        use_external_temp_sensor,
         description: EnOceanClimateEntityDescription
     ):
         """Initialize the EnOcean thermostat sensor device."""
         super().__init__(dev_id, dev_name, description)
 
-        # self.commands =
         self._attr_native_value = None
         self._state = THERMOSTAT_STATE.OFF
         self._valve_position = 0
+        self._use_internal_setpoint = False
         self._target_temperature = 20
         self._current_temperature = 0
-        self.teach_in = False
+        self._use_external_temp_sensor = use_external_temp_sensor
+        self._external_temperature = 0
         self._harvesting_active = False
         self._chargelevel_ok = False
         self._window_open = False
@@ -178,8 +223,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._trigger_reference_run = False
         self._duty_cycle = THERMOSTAT_DUTY_CYCLE["AUTO"]
         self._summer_mode = False
-        self._external_tem_sensor = False
-        self._standby = False
+        self._trigger_standby = False
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -194,7 +238,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         """HVAC current action."""
         if self._state == THERMOSTAT_STATE.OFF:
             return HVACAction.OFF
-        elif self._valve_position > 0:
+        elif self._valve_position > 50:
             return HVACAction.HEATING
 
         return HVACAction.IDLE
@@ -218,26 +262,82 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def extra_state_attributes(self):
         """Return entity specific state attributes."""
         return {
-            "valve_position": self._valve_position,
-            "target_temperature": self._target_temperature,
-            "current_temperature": self._current_temperature,
-            "harvesting_active": self._harvesting_active,
-            "window_open": self._window_open,
+            "valve position": self._valve_position,
+            "target temperature": self._target_temperature,
+            "current temperature": self._current_temperature,
+
+            "harvesting active": self._harvesting_active,
+            "window open": self._window_open,
             # "duty_cycle": self.duty_cycle,
-            # "standby": self.standby,
-            "chargelevel_ok": self._chargelevel_ok,
-            "communication_ok": self._communication_ok,
-            "signalstrength_ok": self._signalstrength_ok,
-            "actuator_ok": self._actuator_ok,
-            "teach:in": self.teach_in
+            "chargelevel ok": self._chargelevel_ok,
+            "communication ok": self._communication_ok,
+            "signalstrength ok": self._signalstrength_ok,
+            "actuator ok": self._actuator_ok,
+
+            "use external temp. sensor": self._use_external_temp_sensor,
+            "external temperature": self._external_temperature,
+
         }
+
+    @property
+    def state(self) -> str | None:
+        """Return the current state."""
+        if self._state is None:
+            return None
+
+        return self._state.value
+
+    def set_preset_mode(self, preset_mode: str) -> None:
+        """Set new preset mode."""
+        mapping = {
+            PRESET_AWAY: ACTIVE_STATE_AWAY,
+            PRESET_COMFORT: ACTIVE_STATE_COMFORT,
+            PRESET_HOME: ACTIVE_STATE_HOME,
+            PRESET_SLEEP: ACTIVE_STATE_SLEEP,
+        }
+        if preset_mode in mapping:
+            # set active state
+            _LOGGER.error("not implemented")
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
         if hvac_mode == HVACMode.OFF:
-            _LOGGER.error("not implemented")
+            self._summer_mode = True
+            self._state = THERMOSTAT_STATE.OFF
         elif hvac_mode == HVACMode.HEAT:
-            _LOGGER.error("not implemented")
+            self._summer_mode = False
+            self._state = THERMOSTAT_STATE.OPERATIONAL
+        self.schedule_update_ha_state()
+
+    def set_temperature(self, **kwargs: Any) -> None:
+        """Set new target temperature."""
+
+        self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
+        self._use_internal_setpoint = True
+        self.schedule_update_ha_state()
+
+    def set_temperature(self, **kwargs: Any) -> None:
+        """Set new target temperature."""
+
+        self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
+        self._use_internal_setpoint = True
+        self.schedule_update_ha_state()
+
+    def set_standby(self):
+        """Set standby"""
+        self._trigger_standby = True
+
+    def set_reference_run(self):
+        """Set reference run"""
+        self._trigger_reference_run = True
+
+    def set_duty_cycle(self, duty_cycle: str):
+        """Set duty cycle"""
+        self._duty_cycle = THERMOSTAT_DUTY_CYCLE[duty_cycle]
+
+    def set_external_temperature(self, temperature: int):
+        """Set external temperature"""
+        self._external_temperature = temperature
 
     def value_changed(self, packet):
 
@@ -246,34 +346,27 @@ class EnOceanThermostatSensor(EnOceanClimate):
         databits = to_bitarray(packet.data)
         self._attr_native_value = databits
 
-        #optional = [0x03]
-        # optional.extend(self.dev_id)
-        #optional.extend([0xff, 0x00])
-        # self.send_command(
-        #    data=[0xa5, 0x28, 0x50, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00],
-        #    optional=optional,
-        #    packet_type=0x01,
-        #
-        # )
+        teach_in = not databits[36]
 
-        self.teach_in = not databits[36]
-
-        if self.teach_in:
+        if teach_in:
             # teach-in
-            self._state = THERMOSTAT_STATE.TEACH_IN
             self.handle_teachin_telegram(databits)
 
         else:
             # normal mode
-            self._state = THERMOSTAT_STATE.OPERATIONAL
             self.handle_data_telegram(databits)
-
 
         """Update the internal state of the sensor."""
         self.schedule_update_ha_state()
 
     def handle_data_telegram(self, databits):
-        _LOGGER.debug("handle data telegram")
+        _LOGGER.debug("[%s] handle data telegram", self.dev_name)
+
+        if (not self._summer_mode):
+            self._state = THERMOSTAT_STATE.OPERATIONAL
+        else:
+            self._state = THERMOSTAT_STATE.OFF
+
         # extract properties
         self._valve_position = from_bitarray(databits[8:16])
         local_offset_mode = databits[16]  # should always be 1
@@ -288,21 +381,39 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
         # if lom == 0 bit 9...15 represents temprature difference to the current target temperatur
         # -> room contol only sends the valve position, actuator does not know the target temperature
-        if (local_offset_mode == 1):
+        if (local_offset_mode == 1 and not self._use_internal_setpoint):
             self._target_temperature = from_bitarray(databits[17:24])/2.0
 
+        self._use_internal_setpoint = False
+
         # trigger a warning, if the TSL does not match value sent to ACT (selection of temperature sensor (ext/int) )
-        if (tslmode != self._external_tem_sensor):
+        if (tslmode != self._use_external_temp_sensor):
             text = "internal sensor"
             if (tslmode == 1):
                 text = "external sensor"
             _LOGGER.warning(
-                "expected actuator to use %s (TSL=%s)", text, tslmode)
+                "[%s] expected actuator to use %s (TSL=%s)", self.dev_name, text, tslmode)
+
+        # trigger warnig bits
+        if (not (self._chargelevel_ok)):
+            _LOGGER.warning(
+                "[%s] low chargelevel", self.dev_name)
+        if (not (self._communication_ok)):
+            _LOGGER.warning(
+                "[%s] six or more consecuetive rdio communication errors occured", self.dev_name)
+        if (not (self._signalstrength_ok)):
+            _LOGGER.warning(
+                "[%s] weak signal strength (<-77dBm)", self.dev_name)
+        if (not (self._actuator_ok)):
+            _LOGGER.error(
+                "[%s] actuator is blocked", self.dev_name)
 
         self.send_response()
 
     def handle_teachin_telegram(self, databits):
-        _LOGGER.debug("handle teach in telegram")
+        _LOGGER.debug("[%s] handle teach in telegram", self.dev_name)
+        self._state = THERMOSTAT_STATE.TEACH_IN
+
         # extract properties
         program = (from_bitarray(databits[0:8]))
         function = (from_bitarray(databits[8:14]))
@@ -311,18 +422,20 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
         # check properties
         if (program != 0xa5):
-            _LOGGER.error("unexpected program id: %s, expected 0xa5", program)
+            _LOGGER.error(
+                "[%s] unexpected program id: %s, expected 0xa5", self.dev_name, program)
             return
         if (function != 0x20):
             _LOGGER.error(
-                "unexpected function id: %s, expected 0x20", function)
+                "[%s] unexpected function id: %s, expected 0x20", self.dev_name, function)
             return
         if (type != 0x6):
-            _LOGGER.error("unexpected type: %s, expected 0x06", type)
+            _LOGGER.error(
+                "[%s] unexpected type: %s, expected 0x06", self.dev_name, type)
             return
         if (manufacturer_id != 0x49):
             _LOGGER.error(
-                "unexpected type: %s, expected 0x45 (Micropelt)", type)
+                "[%s] unexpected type: %s, expected 0x45 (Micropelt)", self.dev_name, type)
             return
 
         # send success
@@ -341,24 +454,24 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def send_response(self):
         data = [0xa5]
         # DB3
-        data.extend([int(self.target_temperature)])
+        data.extend([int(self.target_temperature * 2)])
         # DB2
-        if (self._external_tem_sensor):
-            # todo: implement feed temperature
-            data.extend([0x00])
+        if (self._use_external_temp_sensor):
+            data.extend(
+                [int(max(min(160, self._external_temperature * 4), 0))])
         else:
             data.extend([0x00])
         # DB1
         duty_bits = to_bitarray(self._duty_cycle)
         data.extend([from_bitarray([self._trigger_reference_run, duty_bits[2], duty_bits[1],
-                    duty_bits[0], self._summer_mode, True, self._external_tem_sensor, self._standby])])
+                    duty_bits[0], self._summer_mode, True, self._use_external_temp_sensor, self._trigger_standby])])
 
-        #only trigger stanby and reference run once
+        # trigger reference run and standby only once
         self._trigger_reference_run = False
-        self._standby = False
+        self._trigger_standby = False
 
         # DB0
-        data.extend([0x80])
+        data.extend([0x08])
         # extend date with 0 (place holder for senderid and status)
         data.extend([0x00, 0x00, 0x00, 0x00, 0x00])
 
