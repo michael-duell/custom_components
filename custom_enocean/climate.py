@@ -40,7 +40,6 @@ from homeassistant.helpers.template import is_number
 from .device import EnOceanEntity
 
 from .const import (
-    ATTR_VALUE,
     CONF_USE_EXTERNAL_TEMP,
     DUTY_CYCLES,
     SERVICE_SET_DUTY_CYCLE,
@@ -133,11 +132,11 @@ async def async_setup_platform(
 
     platform.async_register_entity_service(
         SERVICE_SET_DUTY_CYCLE, {vol.Required(
-            ATTR_VALUE): vol.In(DUTY_CYCLES)}, "set_duty_cycle"
+            'duty_cycle'): vol.In(DUTY_CYCLES)}, "set_duty_cycle"
     )
 
     platform.async_register_entity_service(
-        SERVICE_SET_EXT_TEMP, { vol.Required('temperature', msg='The new temperature'): vol.Coerce(float) }, "async_set_external_temperature"
+        SERVICE_SET_EXT_TEMP, { vol.Required('temperature'): vol.Coerce(float) }, "async_set_external_temperature"
     )
 
 def limit_value(value, min_value, max_value):
@@ -274,7 +273,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
             "harvesting active": self._harvesting_active,
             "window open": self._window_open,
-            # "duty_cycle": self.duty_cycle,
+            "duty cycle": self._duty_cycle,
             "chargelevel ok": self._chargelevel_ok,
             "communication ok": self._communication_ok,
             "signalstrength ok": self._signalstrength_ok,
@@ -335,6 +334,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def set_duty_cycle(self, duty_cycle: str):
         """Set duty cycle"""
         self._duty_cycle = THERMOSTAT_DUTY_CYCLE[duty_cycle]
+        self.schedule_update_ha_state()
 
     async def async_set_external_temperature(self, temperature: int):
         """Set external temperature"""
@@ -465,8 +465,8 @@ class EnOceanThermostatSensor(EnOceanClimate):
             data.extend([0x00])
         # DB1
         duty_bits = to_bitarray(self._duty_cycle)
-        data.extend([from_bitarray([self._trigger_reference_run, duty_bits[2], duty_bits[1],
-                    duty_bits[0], self._summer_mode, True, self._use_external_temp_sensor, self._trigger_standby])])
+        data.extend([from_bitarray([self._trigger_reference_run, duty_bits[5], duty_bits[6],
+                    duty_bits[7], self._summer_mode, True, self._use_external_temp_sensor, self._trigger_standby])])
 
         # trigger reference run and standby only once
         self._trigger_reference_run = False
