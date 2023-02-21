@@ -30,6 +30,7 @@ from homeassistant.components.climate import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform
+from homeassistant.config_entries import ConfigEntry
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -37,6 +38,7 @@ from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.helpers.template import is_number
 
 from .device import EnOceanEntity
+
 from .const import (
     ATTR_VALUE,
     CONF_USE_EXTERNAL_TEMP,
@@ -48,6 +50,7 @@ from .const import (
     THERMOSTAT_DUTY_CYCLE,
     THERMOSTAT_SETTINGS,
     THERMOSTAT_STATE)
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,10 +96,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 )
 
 
-def setup_platform(
+async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
-    add_entities: AddEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Set up an EnOcean sensor device."""
@@ -116,7 +119,7 @@ def setup_platform(
             )
         ]
 
-    add_entities(entities)
+    async_add_entities(entities)
 
     platform = entity_platform.async_get_current_platform()
 
@@ -134,16 +137,19 @@ def setup_platform(
     )
 
     platform.async_register_entity_service(
-        SERVICE_SET_EXT_TEMP, {vol.Required(
-            ATTR_VALUE): validate_is_number}, "set_external_temperature"
+        SERVICE_SET_EXT_TEMP, { vol.Required('temperature', msg='The new temperature'): vol.Coerce(float) }, "async_set_external_temperature"
     )
 
-
-def validate_is_number(value):
-    """Validate value is a number."""
-    if is_number(value):
+def limit_value(value, min_value, max_value):
+    """
+    Begrenzt den Wert auf einen Bereich zwischen min_value und max_value.
+    """
+    if value < min_value:
+        return min_value
+    elif value > max_value:
+        return max_value
+    else:
         return value
-    raise vol.Invalid("Value is not a number")
 
 
 class EnOceanClimate(EnOceanEntity, RestoreEntity, ClimateEntity):
@@ -309,19 +315,14 @@ class EnOceanThermostatSensor(EnOceanClimate):
             self._state = THERMOSTAT_STATE.OPERATIONAL
         self.schedule_update_ha_state()
 
-    def set_temperature(self, **kwargs: Any) -> None:
+    async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
+        if ATTR_TEMPERATURE in kwargs:
+            self._target_temperature = limit_value(kwargs[ATTR_TEMPERATURE],self._attr_min_temp,self._attr_max_temp)
+            self._use_internal_setpoint = True
 
-        self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
-        self._use_internal_setpoint = True
-        self.schedule_update_ha_state()
+        await self.async_update_ha_state()
 
-    def set_temperature(self, **kwargs: Any) -> None:
-        """Set new target temperature."""
-
-        self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
-        self._use_internal_setpoint = True
-        self.schedule_update_ha_state()
 
     def set_standby(self):
         """Set standby"""
@@ -335,9 +336,10 @@ class EnOceanThermostatSensor(EnOceanClimate):
         """Set duty cycle"""
         self._duty_cycle = THERMOSTAT_DUTY_CYCLE[duty_cycle]
 
-    def set_external_temperature(self, temperature: int):
+    async def async_set_external_temperature(self, temperature: int):
         """Set external temperature"""
-        self._external_temperature = temperature
+        self._external_temperature =  limit_value(temperature, 0, 80)
+        await self.async_update_ha_state()
 
     def value_changed(self, packet):
 
@@ -454,11 +456,11 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def send_response(self):
         data = [0xa5]
         # DB3
-        data.extend([int(self.target_temperature * 2)])
+        data.extend([int(self._target_temperature * 2)])
         # DB2
         if (self._use_external_temp_sensor):
             data.extend(
-                [int(max(min(160, self._external_temperature * 4), 0))])
+                [int(limit_value( self._external_temperature * 4, 0,80))])
         else:
             data.extend([0x00])
         # DB1
