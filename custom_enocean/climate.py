@@ -212,7 +212,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         super().__init__(dev_id, dev_name, description)
 
         self._attr_native_value = None
-        self._state = THERMOSTAT_STATE.OFF
+        self._state = THERMOSTAT_STATE.UNKNOWN
         self._valve_position = 0
         self._use_internal_setpoint = False
         self._target_temperature = 20
@@ -233,20 +233,20 @@ class EnOceanThermostatSensor(EnOceanClimate):
     @property
     def hvac_mode(self) -> HVACMode:
         """HVAC current mode."""
-        if self._state == THERMOSTAT_STATE.OFF:
-            return HVACMode.OFF
+        if self._state == THERMOSTAT_STATE.OPERATIONAL:
+            return HVACMode.HEAT
 
-        return HVACMode.HEAT
+        return HVACMode.OFF
 
     @property
     def hvac_action(self) -> HVACAction:
         """HVAC current action."""
-        if self._state == THERMOSTAT_STATE.OFF:
-            return HVACAction.OFF
-        elif self._valve_position > 50:
+        if self._state == THERMOSTAT_STATE.OPERATIONAL:
             return HVACAction.HEATING
-
-        return HVACAction.IDLE
+        elif self._state == THERMOSTAT_STATE.SUMMER:
+            return HVACAction.IDLE
+        else:
+            return HVACAction.OFF
 
     @property
     def preset_mode(self) -> str | None:
@@ -306,9 +306,12 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
+        #never set standyby via hvac mode -> no communication any longer!
+        self._trigger_standby = False
+
         if hvac_mode == HVACMode.OFF:
             self._summer_mode = True
-            self._state = THERMOSTAT_STATE.OFF
+            self._state = THERMOSTAT_STATE.SUMMER
         elif hvac_mode == HVACMode.HEAT:
             self._summer_mode = False
             self._state = THERMOSTAT_STATE.OPERATIONAL
@@ -326,6 +329,8 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def set_standby(self):
         """Set standby"""
         self._trigger_standby = True
+        self._state = THERMOSTAT_STATE.STANDBY
+        self.schedule_update_ha_state()
 
     def set_reference_run(self):
         """Set reference run"""
@@ -367,7 +372,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         if (not self._summer_mode):
             self._state = THERMOSTAT_STATE.OPERATIONAL
         else:
-            self._state = THERMOSTAT_STATE.OFF
+            self._state = THERMOSTAT_STATE.SUMMER
 
         # extract properties
         self._valve_position = from_bitarray(databits[8:16])

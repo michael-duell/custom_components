@@ -25,7 +25,6 @@ SERVICE_TRIGGER_STANDBY: Final = "trigger_standby"
 SERVICE_TRIGGER_REFERENCE_RUN: Final = "trigger_reference_run"
 SERVICE_SET_DUTY_CYCLE: Final = "set_duty_cycle"
 SERVICE_SET_EXT_TEMP: Final = "set_external_temperature"
-ATTR_VALUE: Final = "value"
 
 DUTY_CYCLES: Final = [
     "AUTO",
@@ -58,6 +57,8 @@ THERMOSTAT_DUTY_CYCLE: Final ={
 }
 
 class THERMOSTAT_STATE(Enum):
-    OFF = "off"
+    UNKNOWN = "unknown"
+    STANDBY = "standby"
+    SUMMER = "summer"
     TEACH_IN = "teach-in"
     OPERATIONAL ="heat"
