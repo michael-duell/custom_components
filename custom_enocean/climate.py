@@ -136,8 +136,10 @@ async def async_setup_platform(
     )
 
     platform.async_register_entity_service(
-        SERVICE_SET_EXT_TEMP, { vol.Required('temperature'): vol.Coerce(float) }, "async_set_external_temperature"
+        SERVICE_SET_EXT_TEMP, {vol.Required('temperature'): vol.Coerce(
+            float)}, "async_set_external_temperature"
     )
+
 
 def limit_value(value, min_value, max_value):
     """
@@ -195,6 +197,8 @@ class EnOceanThermostatSensor(EnOceanClimate):
         PRESET_HOME,
         PRESET_SLEEP,
     ]
+    _attr_preset_modes = [PRESET_AWAY, PRESET_HOME, PRESET_COMFORT, PRESET_SLEEP]
+
     _attr_icon = "mdi:thermostat"
     _attr_max_temp = THERMOSTAT_SETTINGS["max"]
     _attr_min_temp = THERMOSTAT_SETTINGS["min"]
@@ -215,7 +219,8 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._state = THERMOSTAT_STATE.UNKNOWN
         self._valve_position = 0
         self._use_internal_setpoint = False
-        self._target_temperature = 20
+        self._preset_mode = PRESET_COMFORT
+        self._target_temperature_dict = {PRESET_AWAY: 15, PRESET_HOME: 19, PRESET_COMFORT: 21, PRESET_SLEEP: 18}
         self._current_temperature = 0
         self._use_external_temp_sensor = use_external_temp_sensor
         self._external_temperature = 0
@@ -256,21 +261,29 @@ class EnOceanThermostatSensor(EnOceanClimate):
     @property
     def target_temperature(self) -> float | None:
         """Set target temperature."""
-        return self._target_temperature
+        return self._target_temperature_dict[self._preset_mode]
 
     @property
     def current_temperature(self) -> float | None:
         """Return current temperature."""
         return self._current_temperature
+    
+    @property
+    def preset_mode(self) -> str | None:
+        """Return the current preset mode, e.g., auto, manual, fireplace, extend, etc."""
+        return self._preset_mode
 
     @property
     def extra_state_attributes(self):
         """Return entity specific state attributes."""
         return {
             "valve position": self._valve_position,
-            "target temperature": self._target_temperature,
-            "current temperature": self._current_temperature,
-
+            #"target temperature": self._target_temperature_dict[self._preset_mode],
+            #"current temperature": self._current_temperature,
+            "away temperature": self._target_temperature_dict[PRESET_AWAY],
+            "comfort temperature": self._target_temperature_dict[PRESET_COMFORT],
+            "home temperature": self._target_temperature_dict[PRESET_HOME],
+            "sleep temperature": self._target_temperature_dict[PRESET_SLEEP],
             "harvesting active": self._harvesting_active,
             "window open": self._window_open,
             "duty cycle": self._duty_cycle,
@@ -294,19 +307,15 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
     def set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode."""
-        mapping = {
-            PRESET_AWAY: ACTIVE_STATE_AWAY,
-            PRESET_COMFORT: ACTIVE_STATE_COMFORT,
-            PRESET_HOME: ACTIVE_STATE_HOME,
-            PRESET_SLEEP: ACTIVE_STATE_SLEEP,
-        }
-        if preset_mode in mapping:
-            # set active state
-            _LOGGER.error("not implemented")
+        if (not preset_mode in (_attr_preset_modes)):
+            _LOGGER.error("invalid preset mode: %s", preset_mode)
+            return
+        # set preset mode
+        self._preset_mode = preset_mode
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
-        #never set standyby via hvac mode -> no communication any longer!
+        # never set standyby via hvac mode -> no communication any longer!
         self._trigger_standby = False
 
         if hvac_mode == HVACMode.OFF:
@@ -320,11 +329,11 @@ class EnOceanThermostatSensor(EnOceanClimate):
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
         if ATTR_TEMPERATURE in kwargs:
-            self._target_temperature = limit_value(kwargs[ATTR_TEMPERATURE],self._attr_min_temp,self._attr_max_temp)
+            self._target_temperature_dict[self._preset_mode] = limit_value(
+                kwargs[ATTR_TEMPERATURE], self._attr_min_temp, self._attr_max_temp)
             self._use_internal_setpoint = True
 
         await self.async_update_ha_state()
-
 
     def set_standby(self):
         """Set standby"""
@@ -343,7 +352,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
     async def async_set_external_temperature(self, temperature: int):
         """Set external temperature"""
-        self._external_temperature =  limit_value(temperature, 0, 80)
+        self._external_temperature = limit_value(temperature, 0, 80)
         await self.async_update_ha_state()
 
     def value_changed(self, packet):
@@ -389,7 +398,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         # if lom == 0 bit 9...15 represents temprature difference to the current target temperatur
         # -> room contol only sends the valve position, actuator does not know the target temperature
         if (local_offset_mode == 1 and not self._use_internal_setpoint):
-            self._target_temperature = from_bitarray(databits[17:24])/2.0
+            self._target_temperature_dict[self._preset_mode] = from_bitarray(databits[17:24])/2.0
 
         self._use_internal_setpoint = False
 
@@ -461,11 +470,11 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def send_response(self):
         data = [0xa5]
         # DB3
-        data.extend([int(self._target_temperature * 2)])
+        data.extend([int(self._target_temperature_dict[self._preset_mode] * 2)])
         # DB2
         if (self._use_external_temp_sensor):
             data.extend(
-                [int(limit_value( self._external_temperature * 4, 0,80))])
+                [int(limit_value(self._external_temperature * 4, 0, 80))])
         else:
             data.extend([0x00])
         # DB1
