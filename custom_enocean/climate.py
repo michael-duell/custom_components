@@ -218,12 +218,13 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._attr_native_value = None
         self._state = THERMOSTAT_STATE.UNKNOWN
         self._valve_position = 0
-        self._use_internal_setpoint = False
+        self._use_internal_setpoint = True
         self._preset_mode = PRESET_COMFORT
         self._target_temperature_dict = {PRESET_AWAY: 15, PRESET_HOME: 19, PRESET_COMFORT: 21, PRESET_SLEEP: 18}
         self._current_temperature = 0
         self._use_external_temp_sensor = use_external_temp_sensor
         self._external_temperature = 0
+        self._feed_temperature = 0
         self._harvesting_active = False
         self._chargelevel_ok = False
         self._window_open = False
@@ -231,7 +232,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
         self._signalstrength_ok = False
         self._actuator_ok = False
         self._trigger_reference_run = False
-        self._duty_cycle = THERMOSTAT_DUTY_CYCLE["AUTO"]
+        self._duty_cycle = "AUTO"
         self._summer_mode = False
         self._trigger_standby = False
 
@@ -284,6 +285,7 @@ class EnOceanThermostatSensor(EnOceanClimate):
             "comfort temperature": self._target_temperature_dict[PRESET_COMFORT],
             "home temperature": self._target_temperature_dict[PRESET_HOME],
             "sleep temperature": self._target_temperature_dict[PRESET_SLEEP],
+            "feed temperature": self._feed_temperature,
             "harvesting active": self._harvesting_active,
             "window open": self._window_open,
             "duty cycle": self._duty_cycle,
@@ -307,11 +309,13 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
     def set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode."""
-        if (not preset_mode in (_attr_preset_modes)):
+        if (not preset_mode in (self._attr_preset_modes)):
             _LOGGER.error("invalid preset mode: %s", preset_mode)
             return
         # set preset mode
+        self._use_internal_setpoint = True
         self._preset_mode = preset_mode
+        self.schedule_update_ha_state()
 
     def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
@@ -332,7 +336,6 @@ class EnOceanThermostatSensor(EnOceanClimate):
             self._target_temperature_dict[self._preset_mode] = limit_value(
                 kwargs[ATTR_TEMPERATURE], self._attr_min_temp, self._attr_max_temp)
             self._use_internal_setpoint = True
-
         await self.async_update_ha_state()
 
     def set_standby(self):
@@ -344,15 +347,19 @@ class EnOceanThermostatSensor(EnOceanClimate):
     def set_reference_run(self):
         """Set reference run"""
         self._trigger_reference_run = True
+        self.schedule_update_ha_state()
 
     def set_duty_cycle(self, duty_cycle: str):
         """Set duty cycle"""
-        self._duty_cycle = THERMOSTAT_DUTY_CYCLE[duty_cycle]
+        self._duty_cycle = duty_cycle
         self.schedule_update_ha_state()
 
     async def async_set_external_temperature(self, temperature: int):
         """Set external temperature"""
         self._external_temperature = limit_value(temperature, 0, 80)
+        if (self._use_external_temp_sensor):
+            self._current_temperature = self._external_temperature 
+
         await self.async_update_ha_state()
 
     def value_changed(self, packet):
@@ -386,7 +393,6 @@ class EnOceanThermostatSensor(EnOceanClimate):
         # extract properties
         self._valve_position = from_bitarray(databits[8:16])
         local_offset_mode = databits[16]  # should always be 1
-        self._current_temperature = from_bitarray(databits[24:32])/2.0
         tslmode = databits[32]
         self._harvesting_active = databits[33]
         self._chargelevel_ok = databits[34]
@@ -402,10 +408,15 @@ class EnOceanThermostatSensor(EnOceanClimate):
 
         self._use_internal_setpoint = False
 
+        if(tslmode == 0):
+            self._current_temperature = from_bitarray(databits[24:32])/2.0
+        else:
+            self._feed_temperature = from_bitarray(databits[24:32])/2.0
+
         # trigger a warning, if the TSL does not match value sent to ACT (selection of temperature sensor (ext/int) )
         if (tslmode != self._use_external_temp_sensor):
             text = "internal sensor"
-            if (tslmode == 1):
+            if (self._use_external_temp_sensor):
                 text = "external sensor"
             _LOGGER.warning(
                 "[%s] expected actuator to use %s (TSL=%s)", self.dev_name, text, tslmode)
@@ -474,11 +485,12 @@ class EnOceanThermostatSensor(EnOceanClimate):
         # DB2
         if (self._use_external_temp_sensor):
             data.extend(
-                [int(limit_value(self._external_temperature * 4, 0, 80))])
+                [int(limit_value(self._external_temperature * 4, 0, 160))])
         else:
             data.extend([0x00])
         # DB1
-        duty_bits = to_bitarray(self._duty_cycle)
+        duty_bits = to_bitarray(THERMOSTAT_DUTY_CYCLE[self._duty_cycle])
+        #send feed-temperature, if an external temperature sensor is used 
         data.extend([from_bitarray([self._trigger_reference_run, duty_bits[5], duty_bits[6],
                     duty_bits[7], self._summer_mode, True, self._use_external_temp_sensor, self._trigger_standby])])
 
